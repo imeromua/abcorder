@@ -1,9 +1,10 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# --- КЛАВІАТУРИ ТОВАРІВ І КОШИКА (Залишаємо без змін) ---
+# --- ТОВАРИ ТА КОШИК ---
 
 def get_product_keyboard(article: str, back_callback: str = None):
+    # Додаємо шлях назад у кнопку "Додати", щоб після додавання повернутися
     if back_callback:
         add_callback = f"add_{article}_{back_callback}"
     else:
@@ -40,7 +41,10 @@ def get_cart_actions_keyboard():
         [InlineKeyboardButton(text="🗑 Очистити все", callback_data="clear_cart")]
     ])
 
+# --- ВИБІР ТИПУ ЗАМОВЛЕННЯ ---
+
 def get_order_type_keyboard():
+    """Для звичайного кошика"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🏢 По відділах (ЗПТ)", callback_data="order_type_dept"),
@@ -50,6 +54,7 @@ def get_order_type_keyboard():
     ])
 
 def get_analytics_order_type_keyboard():
+    """Для автозамовлення з аналітики"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🏢 По відділах (ЗПТ)", callback_data="auto_order_dept"),
@@ -58,8 +63,7 @@ def get_analytics_order_type_keyboard():
         [InlineKeyboardButton(text="❌ Скасувати", callback_data="close_catalog")] 
     ])
 
-
-# --- 🆕 НОВІ КЛАВІАТУРИ ДЛЯ АДМІНКИ ---
+# --- АДМІНКА: КЕРУВАННЯ ЮЗЕРАМИ ---
 
 def get_admin_dashboard_keyboard():
     """Головне меню адміна"""
@@ -75,23 +79,25 @@ def get_users_list_keyboard(users: list, page: int = 0):
     builder = InlineKeyboardBuilder()
     
     for u in users:
-        # Емодзі залежно від ролі
-        role_emoji = "🛒" # Shop
-        if u['role'] == 'patron': role_emoji = "👔"
-        elif u['role'] == 'admin': role_emoji = "⚙️"
+        # Емодзі ролі
+        role_icon = "🛒"
+        if u['role'] == 'patron': role_icon = "👔"
+        elif u['role'] == 'admin': role_icon = "⚙️"
         
-        text = f"{role_emoji} {u['full_name']} ({u['username'] or 'NoNick'})"
+        # Ім'я (обрізаємо якщо довге)
+        name = u['full_name'] if u['full_name'] else f"User {u['user_id']}"
+        if len(name) > 20: name = name[:18] + ".."
+        
+        text = f"{role_icon} {name}"
         builder.button(text=text, callback_data=f"admin_user_edit_{u['user_id']}")
     
     builder.adjust(1)
     
-    # Кнопки навігації (Вперед/Назад)
+    # Кнопки навігації
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin_users_list_{page-1}"))
-    
-    # Якщо список повний (10 шт), ймовірно є наступна сторінка
-    if len(users) >= 10:
+    if len(users) >= 10: # Якщо повна сторінка, припускаємо що є ще
         nav_buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"admin_users_list_{page+1}"))
     
     if nav_buttons:
@@ -101,22 +107,21 @@ def get_users_list_keyboard(users: list, page: int = 0):
     return builder.as_markup()
 
 def get_user_role_keyboard(user_id: int, current_role: str):
-    """Кнопки зміни ролі"""
+    """Вибір ролі для юзера"""
     builder = InlineKeyboardBuilder()
     
     roles = [
-        ('shop', '🛒 Магазин (Базовий)'), 
-        ('patron', '👔 Керівник (Аналітика)'), 
-        ('admin', '⚙️ Адмін (Все)')
+        ('shop', '🛒 Магазин'), 
+        ('patron', '👔 Патрон (Керівник)'), 
+        ('admin', '⚙️ Адмін')
     ]
     
     for role_code, role_name in roles:
         if role_code == current_role:
             text = f"✅ {role_name}"
-            callback = "ignore_click" # Кнопка неактивна
+            callback = "ignore_click"
         else:
             text = role_name
-            # admin_set_role_ID_ROLE
             callback = f"admin_set_role_{user_id}_{role_code}"
         
         builder.button(text=text, callback_data=callback)
