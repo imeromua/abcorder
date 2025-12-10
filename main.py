@@ -13,27 +13,26 @@ from src.handlers.common import common_router
 from src.handlers.admin import admin_router
 from src.handlers.catalog import catalog_router
 from src.handlers.cart import cart_router
+from src.handlers.analytics import analytics_router # <--- Новий модуль
 
 # Налаштування логування
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 async def main():
-    # 1. Підключаємо Redis
-    # Створюємо клієнт Redis для перевірки з'єднання та використання в FSM
+    # 1. Підключаємо Redis (для збереження станів при перезапуску)
     redis = Redis.from_url(config.REDIS_DSN)
-    
-    # Ініціалізуємо сховище станів на базі Redis
     storage = RedisStorage(redis=redis)
 
-    # 2. Створюємо бота і диспетчер (вже з Redis!)
+    # 2. Створюємо бота і диспетчер
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher(storage=storage)
 
-    # 3. Реєструємо роутери
+    # 3. Реєструємо роутери (ПОРЯДОК ВАЖЛИВИЙ!)
     dp.include_router(common_router)
     dp.include_router(admin_router)
     dp.include_router(cart_router)
-    dp.include_router(catalog_router)
+    dp.include_router(analytics_router) # <--- Підключили аналітику
+    dp.include_router(catalog_router)   # Каталог часто ловить все підряд, тому краще в кінці
 
     # 4. Дії при старті
     @dp.startup.register
@@ -41,7 +40,7 @@ async def main():
         # Підключаємо Postgres
         await db.connect()
         
-        # Перевіряємо Redis (Ping)
+        # Перевіряємо Redis
         try:
             await redis.ping()
             logging.info("✅ Redis: Успішне підключення!")
@@ -57,6 +56,7 @@ async def main():
 
     logging.info("🚀 Бот ABC Inventory запускається...")
     
+    # Видаляємо старі вебхуки і починаємо слухати
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

@@ -10,7 +10,8 @@ from src.states.user_states import OrderStates
 from src.keyboards.inline import (
     get_cart_keyboard, 
     get_cart_actions_keyboard, 
-    get_success_add_keyboard
+    get_success_add_keyboard,
+    get_order_type_keyboard
 )
 from src.services.exporter import exporter
 
@@ -28,7 +29,6 @@ async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
     article = parts[1]
     
     # Все, що після артикула - це шлях назад (nav_10_2...)
-    # Якщо його немає, буде None
     back_callback = "_".join(parts[2:]) if len(parts) > 2 else None
     
     product = await db.fetch_one("SELECT * FROM products WHERE article = $1", article)
@@ -198,15 +198,49 @@ async def clear_cart_handler(callback: types.CallbackQuery):
 
 
 # =======================
-# 3. ФОРМУВАННЯ ЗАМОВЛЕННЯ (АРХІВАЦІЯ)
+# 3. ФОРМУВАННЯ ЗАМОВЛЕННЯ
 # =======================
 
 @cart_router.callback_query(F.data == "submit_order")
 async def submit_order_handler(callback: types.CallbackQuery):
     user_id = callback.from_user.id
+    
+    # Перевірка на порожній кошик
+    check = await db.fetch_one("SELECT count(*) as cnt FROM cart WHERE user_id = $1", user_id)
+    if check['cnt'] == 0:
+        await callback.answer("Кошик порожній!", show_alert=True)
+        return
+
+    # Перевіряємо роль
     user = await db.fetch_one("SELECT role FROM users WHERE user_id = $1", user_id)
     role = user['role']
 
+    # --- ЛОГІКА РОЗГАЛУЖЕННЯ ---
+    if role == 'shop':
+        # Магазин -> Автоматично по відділах (без питань)
+        await finalize_order(callback, user_id, 'department')
+    else:
+        # Патрон/Адмін -> Запитуємо тип групування
+        await callback.message.answer(
+            "📋 <b>Як сформувати замовлення?</b>\nОберіть тип групування:", 
+            parse_mode="HTML",
+            reply_markup=get_order_type_keyboard()
+        )
+        await callback.answer()
+
+# Обробники вибору типу замовлення
+@cart_router.callback_query(F.data == "order_type_dept")
+async def order_by_dept(callback: types.CallbackQuery):
+    await finalize_order(callback, callback.from_user.id, 'department')
+
+@cart_router.callback_query(F.data == "order_type_supp")
+async def order_by_supp(callback: types.CallbackQuery):
+    await finalize_order(callback, callback.from_user.id, 'supplier')
+
+
+# --- СПІЛЬНА ФУНКЦІЯ ГЕНЕРАЦІЇ ТА АРХІВАЦІЇ ---
+async def finalize_order(callback: types.CallbackQuery, user_id: int, grouping_mode: str):
+    # Витягуємо дані з кошика
     sql = """
         SELECT c.article, c.quantity, p.name, p.department, p.supplier 
         FROM cart c
@@ -214,24 +248,22 @@ async def submit_order_handler(callback: types.CallbackQuery):
         WHERE c.user_id = $1
     """
     rows = await db.fetch_all(sql, user_id)
-    
-    if not rows:
-        await callback.answer("Кошик порожній!", show_alert=True)
-        return
-
     items = [dict(row) for row in rows]
-    await callback.message.answer("⏳ <b>Формую файли замовлення...</b>", parse_mode="HTML")
+
+    msg = await callback.message.answer("⏳ <b>Формую файли...</b>", parse_mode="HTML")
+    
+    # Видаляємо меню вибору (якщо воно було)
+    try: await callback.message.delete()
+    except: pass
 
     try:
-        # 1. Генерація файлів (в data/temp)
-        files = await exporter.generate_order_files(items, role, user_id)
+        # 1. Генерація файлів (падають в data/temp)
+        files = await exporter.generate_order_files(items, grouping_mode, user_id)
         
-        if role == 'shop':
-            summary = f"🚚 <b>Заявка на переміщення готова!</b>\nЗгруповано по {len(files)} відділах."
-        else:
-            summary = f"🏭 <b>Замовлення постачальникам готові!</b>\nЗгруповано по {len(files)} контрагентах."
+        mode_text = "по відділах" if grouping_mode == 'department' else "по постачальниках"
+        summary = f"✅ <b>Замовлення сформовано ({mode_text})!</b>\nФайлів: {len(files)}"
             
-        await callback.message.answer(summary, parse_mode="HTML")
+        await msg.edit_text(summary, parse_mode="HTML")
 
         # 2. Підготовка архіву
         archive_dir = "data/orders_archive"
@@ -248,14 +280,13 @@ async def submit_order_handler(callback: types.CallbackQuery):
             try:
                 shutil.move(file_path, destination)
             except Exception as e:
-                # Якщо не вдалося перемістити, хоча б спробуємо видалити
+                # Якщо перемістити не вийшло, хоча б видалимо з temp
                 try: os.remove(file_path)
                 except: pass
             
         # 3. Очищення бази
         await db.execute("DELETE FROM cart WHERE user_id = $1", user_id)
-        await callback.message.delete()
-        await callback.message.answer("✅ <b>Кошик очищено.</b> Готовий до нових замовлень!", parse_mode="HTML")
+        await callback.message.answer("🗑 Кошик очищено. Готовий до роботи!", parse_mode="HTML")
 
     except Exception as e:
-        await callback.message.answer(f"❌ Помилка генерації: {e}")
+        await msg.edit_text(f"❌ Помилка: {e}")

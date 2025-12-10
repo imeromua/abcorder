@@ -1,25 +1,22 @@
+import pandas as pd
 import os
 import re
 from datetime import datetime
 
-import pandas as pd
-
-
 class ExporterService:
     def clean_filename(self, name):
         """Очищує назву від спецсимволів"""
-        clean = re.sub(r'[^\w\s-]', '', name)
+        clean = re.sub(r'[^\w\s-]', '', str(name))
         clean = clean.strip().replace(' ', '_')
         return clean
 
-    async def generate_order_files(self, items, role, user_id):
+    async def generate_order_files(self, items, grouping_mode, user_id):
         """
-        Генерація файлів Excel
-        items = [{article, name, quantity, department, supplier, ...}]
+        grouping_mode: 'department' (по відділах) або 'supplier' (по постачальниках)
         """
         df = pd.DataFrame(items)
         
-        # Базовий словник колонок
+        # Базові колонки
         export_cols = {
             'department': 'Відділ',
             'article': 'Артикул',
@@ -28,9 +25,9 @@ class ExporterService:
             'supplier': 'Постачальник'
         }
 
-        # --- ЛОГІКА ДЛЯ МАГАЗИНУ (SHOP) ---
-        if role == 'shop':
-            # Прибираємо Постачальника зі списку колонок
+        # --- ЛОГІКА ДЛЯ МАГАЗИНУ / ВІДДІЛІВ ---
+        if grouping_mode == 'department':
+            # Прибираємо Постачальника зі списку колонок для файлу
             if 'supplier' in export_cols:
                 del export_cols['supplier']
         
@@ -44,34 +41,33 @@ class ExporterService:
         temp_dir = "data/temp"
         os.makedirs(temp_dir, exist_ok=True)
 
-        # --- РОЗПОДІЛ І НАЗВИ ФАЙЛІВ ---
+        # --- РОЗПОДІЛ І ПРЕФІКСИ ---
         
-        if role == 'shop':
-            # Ділимо по ВІДДІЛАХ
+        if grouping_mode == 'department':
+            # Группуємо по ВІДДІЛАХ
+            if 'Відділ' not in df_export.columns:
+                df_export['Відділ'] = 'General'
             grouped = df_export.groupby('Відділ')
-            # Формат: "10_10-12_10-40.xlsx" (Без префікса Move)
-            prefix = "" 
+            
+            prefix = "ЗПТ_" # <--- БУЛО "Move_", СТАЛО "ЗПТ_"
         
-        elif role == 'patron':
-            # Для Патрона залишаємо як є (або теж змінимо, якщо треба)
+        elif grouping_mode == 'supplier':
+            # Группуємо по ПОСТАЧАЛЬНИКАХ
             if 'Постачальник' in df_export.columns:
                 df_export['Постачальник'] = df_export['Постачальник'].fillna('Other')
                 grouped = df_export.groupby('Постачальник')
             else:
                 grouped = df_export.groupby('Відділ')
             
-            prefix = "Order_" 
+            prefix = "Order_" # Закупівля
 
+        # Генерація файлів
         for group_name, group_data in grouped:
-            safe_name = self.clean_filename(str(group_name))
-            
-            # Якщо префікс порожній, не додаємо підкреслення на початку
-            if prefix:
-                filename = f"{prefix}{safe_name}_{timestamp}.xlsx"
-            else:
-                filename = f"{safe_name}_{timestamp}.xlsx"
-                
+            safe_name = self.clean_filename(group_name)
+            filename = f"{prefix}{safe_name}_{timestamp}.xlsx"
             filepath = os.path.join(temp_dir, filename)
+            
+            # index=False прибирає нумерацію рядків (0,1,2) зліва
             group_data.to_excel(filepath, index=False)
             output_files.append(filepath)
 
