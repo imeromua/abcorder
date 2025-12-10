@@ -1,6 +1,9 @@
-import asyncpg
 import logging
+
+import asyncpg
+
 from src.config import config
+
 
 class Database:
     def __init__(self):

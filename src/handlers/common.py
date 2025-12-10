@@ -1,5 +1,6 @@
 from aiogram import Router, types
 from aiogram.filters import CommandStart
+
 from src.database.db import db
 
 common_router = Router()

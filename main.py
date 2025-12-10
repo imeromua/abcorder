@@ -1,13 +1,15 @@
 import asyncio
 import logging
 import sys
+
 from aiogram import Bot, Dispatcher
+
 from src.config import config
 from src.database.db import db
-from src.handlers.common import common_router
 from src.handlers.admin import admin_router
-from src.handlers.catalog import catalog_router
 from src.handlers.cart import cart_router
+from src.handlers.catalog import catalog_router
+from src.handlers.common import common_router
 
 # Налаштування логування
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
@@ -20,8 +22,8 @@ async def main():
     # 2. Реєструємо роутери (наші хендлери)
     dp.include_router(common_router)
     dp.include_router(admin_router)
-    dp.include_router(catalog_router)
     dp.include_router(cart_router)
+    dp.include_router(catalog_router)
 
     # 3. Дії при старті (підключення до БД)
     # Використовуємо startup хук

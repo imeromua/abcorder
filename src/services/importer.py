@@ -1,5 +1,7 @@
-import pandas as pd
 import logging
+
+import pandas as pd
+
 from src.database.db import db
 
 # Словник: Як колонка називається в Файлі -> Як називається в Базі

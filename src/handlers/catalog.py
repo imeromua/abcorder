@@ -1,4 +1,5 @@
-from aiogram import Router, F, types
+from aiogram import F, Router, types
+
 from src.database.db import db
 from src.keyboards.inline import get_product_keyboard
 

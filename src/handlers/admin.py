@@ -1,6 +1,8 @@
 import os
-from aiogram import Router, F, Bot, types
+
+from aiogram import Bot, F, Router, types
 from aiogram.filters import Command
+
 from src.config import config
 from src.services.importer import importer
 
