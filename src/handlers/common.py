@@ -1,7 +1,7 @@
-from aiogram import Router, types
+from aiogram import Router, F, types
 from aiogram.filters import CommandStart
-
 from src.database.db import db
+from src.keyboards.main_menu import get_main_menu
 
 common_router = Router()
 
@@ -10,7 +10,6 @@ async def cmd_start(message: types.Message):
     user = message.from_user
     
     # 1. Записуємо користувача в БД (якщо його там немає)
-    # Role за замовчуванням 'shop' (прописано в SQL)
     await db.execute("""
         INSERT INTO users (user_id, username, full_name)
         VALUES ($1, $2, $3)
@@ -33,4 +32,14 @@ async def cmd_start(message: types.Message):
     elif role == 'admin':
         text += "Доступно керування базою даних."
 
-    await message.answer(text, parse_mode="HTML")
+    # 4. Показуємо меню (передаємо ID, щоб перевірити, чи показувати кнопку адміна)
+    await message.answer(
+        text, 
+        parse_mode="HTML",
+        reply_markup=get_main_menu(user.id)
+    )
+
+# Обробка кнопки "Мій профіль" (просто дублює старт)
+@common_router.message(F.text == "👤 Мій профіль")
+async def profile_handler(message: types.Message):
+    await cmd_start(message)

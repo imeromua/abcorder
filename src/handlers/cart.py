@@ -1,24 +1,35 @@
-import os
-
-from aiogram import F, Router, types
-from aiogram.filters import Command
+from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
+from aiogram.filters import Command
 from aiogram.types import FSInputFile
+import os
+import shutil  # Для переміщення файлів в архів
 
 from src.database.db import db
-from src.keyboards.inline import (get_cart_actions_keyboard, get_cart_keyboard,
-                                  get_success_add_keyboard)
-from src.services.exporter import exporter
 from src.states.user_states import OrderStates
+from src.keyboards.inline import (
+    get_cart_keyboard, 
+    get_cart_actions_keyboard, 
+    get_success_add_keyboard
+)
+from src.services.exporter import exporter
 
 cart_router = Router()
 
-# --- 1. ДОДАВАННЯ ТОВАРУ ---
+# =======================
+# 1. ДОДАВАННЯ ТОВАРУ
+# =======================
 
 @cart_router.callback_query(F.data.startswith("add_"))
 async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
-    """Початок додавання товару: запит кількості"""
-    article = callback.data.split("_")[1]
+    """Початок додавання товару"""
+    # Розбираємо callback: add_АРТИКУЛ_ШЛЯХ_НАЗАД
+    parts = callback.data.split("_")
+    article = parts[1]
+    
+    # Все, що після артикула - це шлях назад (nav_10_2...)
+    # Якщо його немає, буде None
+    back_callback = "_".join(parts[2:]) if len(parts) > 2 else None
     
     product = await db.fetch_one("SELECT * FROM products WHERE article = $1", article)
     user = await db.fetch_one("SELECT role FROM users WHERE user_id = $1", callback.from_user.id)
@@ -31,7 +42,7 @@ async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
     limit_text = ""
     max_qty = 999999
     
-    # Логіка для магазинів (НЗ = 3)
+    # Логіка лімітів для магазинів
     if role == 'shop':
         available = int(product['stock_qty']) - 3
         if available < 0: available = 0
@@ -42,7 +53,14 @@ async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
             await callback.answer("⛔️ Товар недоступний (Залишок < 3)", show_alert=True)
             return
 
-    await state.update_data(article=article, max_qty=max_qty, role=role, product_name=product['name'])
+    # Зберігаємо дані (включаючи back_callback) у стані
+    await state.update_data(
+        article=article, 
+        max_qty=max_qty, 
+        role=role, 
+        product_name=product['name'],
+        back_callback=back_callback 
+    )
     await state.set_state(OrderStates.waiting_for_quantity)
 
     await callback.message.answer(
@@ -67,6 +85,7 @@ async def process_quantity(message: types.Message, state: FSMContext):
     max_qty = data['max_qty']
     role = data['role']
     product_name = data.get('product_name', 'Товар')
+    back_callback = data.get('back_callback')
 
     # Перевірки
     if role == 'shop' and qty > max_qty:
@@ -90,27 +109,27 @@ async def process_quantity(message: types.Message, state: FSMContext):
 
     await state.clear()
     
-    # Відповідь з кнопкою переходу до кошика
+    # Відповідь з кнопкою "Продовжити покупки" (якщо є back_callback)
     await message.answer(
         f"✅ <b>Додано в кошик:</b> {product_name} — {qty} шт.", 
         parse_mode="HTML",
-        reply_markup=get_success_add_keyboard()
+        reply_markup=get_success_add_keyboard(back_callback)
     )
 
 
 @cart_router.callback_query(F.data == "cancel_order")
 async def cancel_handler(callback: types.CallbackQuery, state: FSMContext):
-    """Скасування додавання"""
     await state.clear()
     await callback.message.delete()
     await callback.answer("Скасовано")
 
 
-# --- 2. ПЕРЕГЛЯД КОШИКА ---
+# =======================
+# 2. ПЕРЕГЛЯД КОШИКА
+# =======================
 
 async def show_cart(message_or_callback, user_id):
     """Універсальна функція показу кошика"""
-    # SQL: беремо товари юзера
     sql = """
         SELECT c.article, c.quantity, p.name, p.stock_qty, p.stock_sum, p.sales_qty, p.sales_sum 
         FROM cart c
@@ -124,77 +143,70 @@ async def show_cart(message_or_callback, user_id):
     message = message_or_callback.message if is_callback else message_or_callback
 
     if not items:
-        text = "🛒 <b>Ваш кошик порожній.</b>\nЗнайдіть товар через пошук і додайте його."
+        text = "🛒 <b>Ваш кошик порожній.</b>"
         if is_callback:
-            await message.answer(text, parse_mode="HTML") # Краще нове повідомлення, щоб не губилось
+            await message.answer(text, parse_mode="HTML")
         else:
             await message.answer(text, parse_mode="HTML")
         return
 
-    # Формування чека
     text = "🛒 <b>ВАШЕ ЗАМОВЛЕННЯ:</b>\n\n"
-    total_items = 0
     total_sum = 0
 
     for i, item in enumerate(items, 1):
         price = 0
         stock_qty = float(item['stock_qty'])
-        sales_qty = float(item['sales_qty'])
-        
-        # Розрахунок ціни
         if stock_qty > 0:
             price = float(item['stock_sum']) / stock_qty
-        elif sales_qty > 0:
-            price = float(item['sales_sum']) / sales_qty
             
         qty = item['quantity']
         sum_line = price * qty
         total_sum += sum_line
-        total_items += 1
 
         text += f"<b>{i}. {item['name']}</b>\n"
         text += f"   🆔 <code>{item['article']}</code> | {qty} шт x {price:.2f} грн\n"
 
     text += f"\n----------------\n"
-    text += f"📦 <b>Всього позицій:</b> {total_items}\n"
+    text += f"📦 <b>Всього позицій:</b> {len(items)}\n"
     text += f"💰 <b>Орієнтовна сума:</b> {total_sum:.2f} грн"
 
     await message.answer(text, parse_mode="HTML", reply_markup=get_cart_actions_keyboard())
 
 
+# Команда /cart
 @cart_router.message(Command("cart"))
 async def view_cart_command(message: types.Message):
-    """Команда /cart"""
     await show_cart(message, message.from_user.id)
 
+# Текстова кнопка "🛒 Кошик" (з головного меню)
+@cart_router.message(F.text == "🛒 Кошик")
+async def view_cart_text(message: types.Message):
+    await show_cart(message, message.from_user.id)
 
+# Інлайн кнопка "Перейти до кошика"
 @cart_router.callback_query(F.data == "view_cart_btn")
 async def view_cart_btn(callback: types.CallbackQuery):
-    """Кнопка 'Перейти до кошика'"""
     await show_cart(callback, callback.from_user.id)
     await callback.answer()
 
-
-# --- 3. КЕРУВАННЯ ЗАМОВЛЕННЯМ ---
-
+# Очищення кошика
 @cart_router.callback_query(F.data == "clear_cart")
 async def clear_cart_handler(callback: types.CallbackQuery):
-    """Очищення кошика"""
     await db.execute("DELETE FROM cart WHERE user_id = $1", callback.from_user.id)
     await callback.message.edit_text("🗑 <b>Кошик очищено!</b>", parse_mode="HTML")
     await callback.answer("Готово")
 
 
+# =======================
+# 3. ФОРМУВАННЯ ЗАМОВЛЕННЯ (АРХІВАЦІЯ)
+# =======================
+
 @cart_router.callback_query(F.data == "submit_order")
 async def submit_order_handler(callback: types.CallbackQuery):
-    """Формування файлів та відправка"""
     user_id = callback.from_user.id
-    
-    # 1. Роль
     user = await db.fetch_one("SELECT role FROM users WHERE user_id = $1", user_id)
     role = user['role']
 
-    # 2. Товари
     sql = """
         SELECT c.article, c.quantity, p.name, p.department, p.supplier 
         FROM cart c
@@ -211,10 +223,9 @@ async def submit_order_handler(callback: types.CallbackQuery):
     await callback.message.answer("⏳ <b>Формую файли замовлення...</b>", parse_mode="HTML")
 
     try:
-        # 3. Експорт
+        # 1. Генерація файлів (в data/temp)
         files = await exporter.generate_order_files(items, role, user_id)
         
-        # 4. Звіт
         if role == 'shop':
             summary = f"🚚 <b>Заявка на переміщення готова!</b>\nЗгруповано по {len(files)} відділах."
         else:
@@ -222,18 +233,27 @@ async def submit_order_handler(callback: types.CallbackQuery):
             
         await callback.message.answer(summary, parse_mode="HTML")
 
-        # 5. Відправка файлів
+        # 2. Підготовка архіву
+        archive_dir = "data/orders_archive"
+        os.makedirs(archive_dir, exist_ok=True)
+
         for file_path in files:
+            # Відправка
             await callback.message.answer_document(FSInputFile(file_path))
-            # Видаляємо тимчасовий файл
-            try:
-                os.remove(file_path)
-            except:
-                pass
             
-        # 6. Фінал
+            # Архівація (переміщення з temp в archive)
+            filename = os.path.basename(file_path)
+            destination = os.path.join(archive_dir, filename)
+            
+            try:
+                shutil.move(file_path, destination)
+            except Exception as e:
+                # Якщо не вдалося перемістити, хоча б спробуємо видалити
+                try: os.remove(file_path)
+                except: pass
+            
+        # 3. Очищення бази
         await db.execute("DELETE FROM cart WHERE user_id = $1", user_id)
-        # Видаляємо повідомлення з кнопками, щоб не натиснули ще раз
         await callback.message.delete()
         await callback.message.answer("✅ <b>Кошик очищено.</b> Готовий до нових замовлень!", parse_mode="HTML")
 
