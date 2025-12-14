@@ -1,3 +1,4 @@
+from email.mime import message
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
@@ -105,8 +106,8 @@ async def process_quantity(message: types.Message, state: FSMContext):
         await message.answer("❌ Кількість має бути більше 0.")
         return
     
-    if qty > 10000:
-         await message.answer(f"🧐 Ви ввели <b>{qty}</b> шт. Це забагато. Перевірте.", parse_mode="HTML")
+    if qty > config.MAX_ORDER_QTY:
+         await message.answer(f"🧐 Ви ввели <b>{qty}</b> шт. Це більше ліміту ({config.MAX_ORDER_QTY}). Перевірте.", parse_mode="HTML")
          return
 
     # Запис у БД (Upsert)

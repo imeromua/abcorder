@@ -40,5 +40,8 @@ class Config:
     MIN_SALES = int(os.getenv("MIN_SALES_THRESHOLD", 0))
     MIN_STOCK = int(os.getenv("MIN_STOCK_THRESHOLD", 0))
 
+    # Максимальна кількість товару в одній позиції
+    MAX_ORDER_QTY = int(os.getenv("MAX_ORDER_QUANTITY", 1000))
+
 # Створюємо екземпляр, щоб імпортувати його як `from src.config import config`
 config = Config()
