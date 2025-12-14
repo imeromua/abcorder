@@ -1,3 +1,4 @@
+import asyncio  # <--- ДОДАНО ІМПОРТ
 import os
 
 from aiogram import F, Router, types
@@ -5,7 +6,7 @@ from aiogram.types import FSInputFile
 
 from src.database.db import db
 from src.keyboards.inline import \
-    get_analytics_order_type_keyboard  # <--- Додали імпорт
+    get_analytics_order_type_keyboard 
 from src.services.exporter import exporter
 
 analytics_router = Router()
@@ -93,6 +94,9 @@ async def generate_auto_order_action(callback: types.CallbackQuery):
         
         for f in files:
             await callback.message.answer_document(FSInputFile(f))
+            # 🔥 ПАУЗА, ЩОБ НЕ ЗЛОВИТИ FLOOD WAIT
+            await asyncio.sleep(0.5)
+            
             try: os.remove(f)
             except: pass
             
@@ -134,6 +138,9 @@ async def generate_low_stock_report(callback: types.CallbackQuery):
         
         for f in files:
             await callback.message.answer_document(FSInputFile(f))
+            # 🔥 ПАУЗА ТУТ ТАКОЖ
+            await asyncio.sleep(0.5)
+            
             try: os.remove(f)
             except: pass
 
@@ -173,6 +180,9 @@ async def generate_top_sales(callback: types.CallbackQuery):
         
         for f in files:
             await callback.message.answer_document(FSInputFile(f))
+            # 🔥 І ТУТ ПАУЗА (про всяк випадок)
+            await asyncio.sleep(0.5)
+            
             try: os.remove(f)
             except: pass
 
