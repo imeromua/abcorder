@@ -1,5 +1,6 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from src.config import config  # Треба імпортувати конфіг, щоб показати цифри
 
 # =======================
 # 1. ТОВАРИ ТА КОШИК
@@ -185,3 +186,20 @@ def get_dept_export_keyboard(depts: list):
     builder.adjust(2)
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_export_menu"))
     return builder.as_markup()
+
+def get_export_filter_keyboard():
+    """Питання про фільтрацію перед експортом"""
+    min_s = config.MIN_SALES
+    min_st = config.MIN_STOCK
+    
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"✅ Так (Тільки живі: Sales≥{min_s} або Stock≥{min_st})", 
+            callback_data="export_filter_yes"
+        )],
+        [InlineKeyboardButton(
+            text="🚫 Ні (Вивантажити ВСЕ, навіть нулі)", 
+            callback_data="export_filter_no"
+        )],
+        [InlineKeyboardButton(text="❌ Скасувати", callback_data="admin_back_main")]
+    ])
