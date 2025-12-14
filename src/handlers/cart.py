@@ -1,22 +1,21 @@
-from email.mime import message
-from aiogram import Router, F, types
-from aiogram.fsm.context import FSMContext
-from aiogram.filters import Command
-from aiogram.types import FSInputFile
 import os
 import shutil
-from src.database.db import db
-from src.states.user_states import OrderStates
-from src.keyboards.inline import (
-    get_cart_keyboard, 
-    get_cart_actions_keyboard, 
-    get_success_add_keyboard,
-    get_order_type_keyboard
-)
-from src.services.exporter import exporter
+from email.mime import message
+
+from aiogram import F, Router, types
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.types import FSInputFile
+
 from src.config import config
-from src.services.notifier import notifier
+from src.database.db import db
+from src.keyboards.inline import (get_cart_actions_keyboard, get_cart_keyboard,
+                                  get_order_type_keyboard,
+                                  get_success_add_keyboard)
 from src.phrases import get_random
+from src.services.exporter import exporter
+from src.services.notifier import notifier
+from src.states.user_states import OrderStates
 
 cart_router = Router()
 

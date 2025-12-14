@@ -1,30 +1,31 @@
-import os
-import shutil
 import asyncio
-import aiohttp
+import os
 import re
+import shutil
 import zipfile
 from datetime import datetime
-from aiogram import Router, F, Bot, types
+
+import aiohttp
+from aiogram import Bot, F, Router, types
 from aiogram.fsm.context import FSMContext
-from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (FSInputFile, InlineKeyboardButton,
+                           InlineKeyboardMarkup)
+
 from src.config import config
-from src.services.importer import importer
-from src.services.exporter import exporter
-from src.services.notifier import notifier
-from src.phrases import get_random
 from src.database.db import db
+from src.keyboards.inline import (get_admin_dashboard_keyboard,
+                                  get_cancel_import_keyboard,
+                                  get_dept_export_keyboard,
+                                  get_export_filter_keyboard,
+                                  get_export_menu_keyboard,
+                                  get_import_menu_keyboard,
+                                  get_user_role_keyboard,
+                                  get_users_list_keyboard)
+from src.phrases import get_random
+from src.services.exporter import exporter
+from src.services.importer import importer
+from src.services.notifier import notifier
 from src.states.user_states import AdminStates
-from src.keyboards.inline import (
-    get_admin_dashboard_keyboard, 
-    get_users_list_keyboard, 
-    get_user_role_keyboard,
-    get_import_menu_keyboard,
-    get_cancel_import_keyboard,
-    get_export_menu_keyboard,
-    get_dept_export_keyboard,
-    get_export_filter_keyboard
-)
 
 admin_router = Router()
 

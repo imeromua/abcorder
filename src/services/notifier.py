@@ -1,26 +1,28 @@
+import re
 import sys
 import traceback
-import re
-from loguru import logger
+
 from aiogram import Bot
+from loguru import logger
+
 from src.config import config
 
 # --- НАЛАШТУВАННЯ LOGURU ---
 logger.remove()
 
-# 1. Вивід в консоль
+# 1. Вивід в консоль (з розширеною інформацією: файл:функція:рядок)
 logger.add(
     sys.stdout, 
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>", 
+    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>", 
     level="INFO"
 )
 
-# 2. Вивід у файл
+# 2. Вивід у файл (з архівацією старих логів)
 logger.add(
     "logs/bot.log", 
-    rotation="5 MB", 
-    compression="zip", 
-    level="DEBUG", 
+    rotation="5 MB",      # Новий файл кожні 5 МБ
+    compression="zip",    # Стискати старі логи
+    level="DEBUG",        # Писати все, навіть дрібні деталі
     encoding="utf-8"
 )
 
@@ -30,6 +32,7 @@ class NotifierService:
 
     def _clean_html(self, text: str) -> str:
         """Видаляє HTML теги для чистого логу в консолі/файлі"""
+        if not text: return ""
         clean = re.sub('<[^<]+?>', '', text)
         return clean
 
@@ -37,10 +40,10 @@ class NotifierService:
         """
         Звичайний лог (INFO).
         """
-        # У файл пишемо чистий текст (без <b>)
+        # У файл/консоль пишемо чистий текст
         logger.info(self._clean_html(text))
         
-        # У Telegram відправляємо красивий (з <b>)
+        # У Telegram відправляємо красивий (з форматуванням <b>)
         if self.log_chat_id:
             try:
                 await bot.send_message(self.log_chat_id, f"ℹ️ <b>INFO:</b>\n{text}", parse_mode="HTML")
@@ -71,6 +74,7 @@ class NotifierService:
         
         if self.log_chat_id:
             try:
+                # Обрізаємо трейсбек, якщо він занадто довгий для Телеграм
                 short_tb = tb[-3000:] if len(tb) > 3000 else tb
                 msg = (
                     f"🚨 <b>CRITICAL ERROR!</b>\n"

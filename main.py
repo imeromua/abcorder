@@ -1,19 +1,21 @@
 import asyncio
+import signal  # <--- Додаємо
 import sys
-import signal # <--- Додаємо
+
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.redis import RedisStorage
 from redis.asyncio import Redis
 
 from src.config import config
 from src.database.db import db
+from src.handlers.admin import admin_router
+from src.handlers.analytics import analytics_router
+from src.handlers.cart import cart_router
+from src.handlers.catalog import catalog_router
+from src.handlers.common import common_router
+from src.middlewares.logger import LoggingMiddleware
 from src.services.notifier import logger, notifier
 
-from src.handlers.common import common_router
-from src.handlers.admin import admin_router
-from src.handlers.catalog import catalog_router
-from src.handlers.cart import cart_router
-from src.handlers.analytics import analytics_router
 
 # Функція для ігнорування Ctrl+C
 def signal_handler(sig, frame):
@@ -27,6 +29,7 @@ async def main():
     storage = RedisStorage(redis=redis)
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher(storage=storage)
+    dp.update.middleware(LoggingMiddleware())
 
     dp.include_router(common_router)
     dp.include_router(admin_router)

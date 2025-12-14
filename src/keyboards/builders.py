@@ -1,5 +1,6 @@
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
 
 def build_catalog_menu(items: list, level: str, parent_id: str = ""):
     """

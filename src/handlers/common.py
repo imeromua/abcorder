@@ -1,8 +1,9 @@
-from aiogram import Router, F, types
+from aiogram import F, Router, types
 from aiogram.filters import CommandStart
+
+from src.config import config  # <--- Не забудь імпортувати конфіг
 from src.database.db import db
 from src.keyboards.main_menu import get_main_menu
-from src.config import config  # <--- Не забудь імпортувати конфіг
 
 common_router = Router()
 

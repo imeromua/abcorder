@@ -1,9 +1,12 @@
-from aiogram import Router, F, types
-from aiogram.types import FSInputFile
 import os
+
+from aiogram import F, Router, types
+from aiogram.types import FSInputFile
+
 from src.database.db import db
+from src.keyboards.inline import \
+    get_analytics_order_type_keyboard  # <--- Додали імпорт
 from src.services.exporter import exporter
-from src.keyboards.inline import get_analytics_order_type_keyboard # <--- Додали імпорт
 
 analytics_router = Router()
 
@@ -20,7 +23,7 @@ async def show_analytics_menu(message: types.Message):
         "Що бажаєте зробити?"
     )
     
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔮 Сформувати Автозамовлення", callback_data="analytics_auto_menu")],
         [InlineKeyboardButton(text="📉 Звіт: Закінчуються товари", callback_data="analytics_low_stock")],

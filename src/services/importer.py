@@ -1,7 +1,9 @@
-import pandas as pd
 import logging
-from src.database.db import db
+
+import pandas as pd
+
 from src.config import config
+from src.database.db import db
 
 # Маппинг колонок (Excel -> DB)
 COLUMN_MAPPING = {

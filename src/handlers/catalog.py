@@ -1,9 +1,11 @@
 import math
 from contextlib import suppress
-from aiogram import Router, F, types
-from aiogram.types import CallbackQuery
+
+from aiogram import F, Router, types
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardButton
+
 from src.database.db import db
 from src.keyboards.inline import get_product_keyboard
 from src.phrases import get_random
