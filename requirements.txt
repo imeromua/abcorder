@@ -6,3 +6,4 @@ openpyxl
 pyxlsb
 python-dotenv
 loguru
+aiohttp

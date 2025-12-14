@@ -1,10 +1,11 @@
 import pandas as pd
 import logging
 from src.database.db import db
+from src.config import config
 
-# Маппинг колонок (Згідно з твоїм скріншотом)
+# Маппинг колонок (Excel -> DB)
 COLUMN_MAPPING = {
-    "Відділ": "department",          # Це числовий ID (Корінь меню)
+    "Відділ": "department",
     "Артикул": "article",
     "Найменування": "name",
     "Постачальник": "supplier",
@@ -17,61 +18,78 @@ COLUMN_MAPPING = {
 }
 
 class ImporterService:
-    async def import_file(self, file_path: str):
+    async def import_file(self, file_path: str) -> int:
+        """
+        Читає файл, фільтрує дані та оновлює базу.
+        Повертає кількість імпортованих товарів.
+        """
         try:
-            # Читаємо файл
+            # 1. Читання файлу
             if file_path.endswith('.csv'):
                 df = pd.read_csv(file_path)
             else:
                 df = pd.read_excel(file_path)
 
-            # Чистимо
-            df = df.dropna(subset=['Артикул'])
+            # 2. Базове очищення
+            df = df.dropna(subset=['Артикул'])  # Артикул обов'язковий
             df = df.fillna('')
 
-            # --- ФОРМУВАННЯ ШЛЯХУ (НОВА ЛОГІКА) ---
-            # Структура: Департамент -> Піддеп-т -> Група -> Підгрупа
-            # (Відділ йде окремо в колонку department)
-            
+            # 3. Формування шляху категорії (Breadcrumbs)
             def build_path(row):
-                # Список колонок строго в порядку ієрархії
                 hierarchy_cols = ['Департамент', 'Піддеп-т', 'Група', 'Підгрупа']
                 parts = []
                 for col in hierarchy_cols:
-                    # Якщо колонка є і вона не порожня
                     val = str(row.get(col, '')).strip()
+                    # Ігноруємо '0', 'nan', пусті рядки
                     if val and val != '0' and val.lower() != 'nan':
                         parts.append(val)
                 return "/".join(parts)
 
             df['category_path'] = df.apply(build_path, axis=1)
 
-            # Перейменовуємо
+            # 4. Перейменування колонок згідно маппінгу
             df = df.rename(columns=COLUMN_MAPPING)
 
-            # Фільтруємо колонки (залишаємо тільки ті, що є в маппінгу + category_path)
+            # Залишаємо тільки потрібні колонки
             valid_cols = list(COLUMN_MAPPING.values()) + ['category_path']
             available_cols = [c for c in valid_cols if c in df.columns]
             df = df[available_cols]
 
-            # Конвертація типів
+            # 5. Конвертація типів даних
             df['article'] = df['article'].astype(str)
             
-            # Числа
             numeric_cols = ['sales_qty', 'sales_sum', 'stock_qty', 'stock_sum', 'department']
             for col in numeric_cols:
                 if col in df.columns:
-                    # Замінюємо коми на крапки, прибираємо пробіли
+                    # Чистимо числа: "1 234,56" -> 1234.56
                     df[col] = pd.to_numeric(
                         df[col].astype(str).str.replace(',', '.').replace('\xa0', '').replace(' ', ''), 
                         errors='coerce'
                     ).fillna(0)
 
+            # 6. 🔥 РОЗУМНА ФІЛЬТРАЦІЯ
+            # Відсіюємо "мертві" товари згідно налаштувань .env
+            initial_count = len(df)
+            
+            # Логіка: Залишаємо товар, ЯКЩО (Продажі >= MIN) АБО (Залишок >= MIN)
+            # Тобто, видаляємо тільки якщо І продажі малі, І залишку немає.
+            df = df[ 
+                (df['sales_qty'] >= config.MIN_SALES) | 
+                (df['stock_qty'] >= config.MIN_STOCK) 
+            ]
+            
+            filtered_count = len(df)
+            dead_items = initial_count - filtered_count
+            
+            if dead_items > 0:
+                logging.info(f"🧹 Importer: Відфільтровано {dead_items} мертвих позицій (Sales<{config.MIN_SALES}, Stock<{config.MIN_STOCK})")
+
+            # 7. Підготовка до вставки
             records = df.to_dict('records')
             total = len(records)
-            logging.info(f"📊 Зчитано {total} рядків. Імпорт...")
+            logging.info(f"📊 До імпорту готово {total} рядків.")
 
-            # Batch Insert
+            # 8. Пакетна вставка (Batch Insert)
             batch_size = 1000
             for i in range(0, total, batch_size):
                 batch = records[i:i + batch_size]
@@ -84,6 +102,7 @@ class ImporterService:
             raise e
 
     async def _insert_batch(self, batch):
+        """Вставка пакета даних в БД"""
         values = []
         for row in batch:
             values.append((

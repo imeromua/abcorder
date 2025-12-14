@@ -1,10 +1,12 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# --- ТОВАРИ ТА КОШИК ---
+# =======================
+# 1. ТОВАРИ ТА КОШИК
+# =======================
 
 def get_product_keyboard(article: str, back_callback: str = None):
-    # Додаємо шлях назад у кнопку "Додати", щоб після додавання повернутися
+    """Кнопки під карткою товару: Додати та Назад/Закрити"""
     if back_callback:
         add_callback = f"add_{article}_{back_callback}"
     else:
@@ -22,29 +24,35 @@ def get_product_keyboard(article: str, back_callback: str = None):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_cart_keyboard(article: str):
+    """Кнопка скасування під час введення кількості"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Скасувати", callback_data="cancel_order")]
     ])
 
 def get_success_add_keyboard(back_callback: str = None):
+    """Кнопки після успішного додавання товару"""
     buttons = [
         [InlineKeyboardButton(text="🛒 Перейти до кошика", callback_data="view_cart_btn")]
     ]
+    
     if back_callback and back_callback != "None":
         buttons.append([InlineKeyboardButton(text="⬅️ Продовжити покупки", callback_data=back_callback)])
         
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_cart_actions_keyboard():
+    """Кнопки в кошику: Сформувати або Очистити"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Сформувати замовлення", callback_data="submit_order")],
-        [InlineKeyboardButton(text="🗑 Очистити все", callback_data="clear_cart")]
+        [
+            InlineKeyboardButton(text="✅ Сформувати замовлення", callback_data="submit_order")
+        ],
+        [
+            InlineKeyboardButton(text="🗑 Очистити все", callback_data="clear_cart")
+        ]
     ])
 
-# --- ВИБІР ТИПУ ЗАМОВЛЕННЯ ---
-
 def get_order_type_keyboard():
-    """Для звичайного кошика"""
+    """Вибір типу групування замовлення"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🏢 По відділах (ЗПТ)", callback_data="order_type_dept"),
@@ -54,7 +62,7 @@ def get_order_type_keyboard():
     ])
 
 def get_analytics_order_type_keyboard():
-    """Для автозамовлення з аналітики"""
+    """Вибір типу замовлення з аналітики"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🏢 По відділах (ЗПТ)", callback_data="auto_order_dept"),
@@ -63,16 +71,25 @@ def get_analytics_order_type_keyboard():
         [InlineKeyboardButton(text="❌ Скасувати", callback_data="close_catalog")] 
     ])
 
-# --- АДМІНКА: КЕРУВАННЯ ЮЗЕРАМИ ---
+
+# =======================
+# 2. АДМІН-ПАНЕЛЬ
+# =======================
 
 def get_admin_dashboard_keyboard():
     """Головне меню адміна"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 Керування користувачами", callback_data="admin_users_list_0")],
-        [InlineKeyboardButton(text="📥 Імпорт бази", callback_data="admin_import_info")],
         [InlineKeyboardButton(text="📦 Архів замовлень", callback_data="admin_archive_list")],
+        [
+            InlineKeyboardButton(text="📥 Меню Імпорту", callback_data="admin_import_menu"),
+            InlineKeyboardButton(text="📤 Експорт бази", callback_data="admin_export_menu")
+        ],
         [InlineKeyboardButton(text="📢 Розсилка всім", callback_data="admin_broadcast_start")]
     ])
+
+
+# --- Керування юзерами ---
 
 def get_users_list_keyboard(users: list, page: int = 0):
     """Список юзерів з пагінацією"""
@@ -84,7 +101,7 @@ def get_users_list_keyboard(users: list, page: int = 0):
         if u['role'] == 'patron': role_icon = "👔"
         elif u['role'] == 'admin': role_icon = "⚙️"
         
-        # Ім'я (обрізаємо якщо довге)
+        # Ім'я
         name = u['full_name'] if u['full_name'] else f"User {u['user_id']}"
         if len(name) > 20: name = name[:18] + ".."
         
@@ -97,7 +114,7 @@ def get_users_list_keyboard(users: list, page: int = 0):
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin_users_list_{page-1}"))
-    if len(users) >= 10: # Якщо повна сторінка, припускаємо що є ще
+    if len(users) >= 10: # Припускаємо, що є ще сторінка
         nav_buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"admin_users_list_{page+1}"))
     
     if nav_buttons:
@@ -112,7 +129,7 @@ def get_user_role_keyboard(user_id: int, current_role: str):
     
     roles = [
         ('shop', '🛒 Магазин'), 
-        ('patron', '👔 Патрон (Керівник)'), 
+        ('patron', '👔 Патрон'), 
         ('admin', '⚙️ Адмін')
     ]
     
@@ -128,4 +145,43 @@ def get_user_role_keyboard(user_id: int, current_role: str):
         
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text="⬅️ Назад до списку", callback_data="admin_users_list_0"))
+    return builder.as_markup()
+
+
+# --- Імпорт ---
+
+def get_import_menu_keyboard():
+    """Меню вибору методу імпорту"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Прямий файл (.xlsx/.csv/.zip)", callback_data="import_start_direct")],
+        [InlineKeyboardButton(text="🔗 За лінком (Google Drive)", callback_data="import_start_link")],
+        [InlineKeyboardButton(text="📂 Локальний (data/imports)", callback_data="import_start_local")],
+        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="admin_back_main")]
+    ])
+
+def get_cancel_import_keyboard():
+    """Кнопка скасування процесу імпорту"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Скасувати імпорт", callback_data="import_cancel")]
+    ])
+
+
+# --- Експорт ---
+
+def get_export_menu_keyboard():
+    """Меню експорту"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌍 Вивантажити ВСЕ", callback_data="export_run_full")],
+        [InlineKeyboardButton(text="🏢 Вибрати відділ", callback_data="export_select_dept")],
+        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="admin_back_main")]
+    ])
+
+def get_dept_export_keyboard(depts: list):
+    """Кнопки вибору відділу для експорту"""
+    builder = InlineKeyboardBuilder()
+    for d in depts:
+        builder.button(text=f"Відділ {d}", callback_data=f"export_dept_{d}")
+    
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_export_menu"))
     return builder.as_markup()
