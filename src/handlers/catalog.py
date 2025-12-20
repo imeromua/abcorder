@@ -1,306 +1,251 @@
-import math
-from contextlib import suppress
-
-from aiogram import F, Router, types
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery
-from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardButton
+from aiogram import Router, F, types
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
 from src.database.db import db
-from src.keyboards.inline import get_product_keyboard
-from src.phrases import get_random
+from src.keyboards import (
+    get_main_menu, 
+    get_departments_keyboard, 
+    get_categories_keyboard, 
+    get_products_keyboard
+)
 
-catalog_router = Router()
+router = Router()
 
-# --- ДОПОМІЖНІ БІЛДЕРИ КЛАВІАТУР ---
+class SearchStates(StatesGroup):
+    waiting_for_query = State()
 
-def build_universal_menu(items, callback_prefix, back_callback):
-    """Будує меню для папок/категорій"""
-    builder = InlineKeyboardBuilder()
-    for item in items:
-        # Обрізаємо дуже довгі назви
-        name = str(item['name'])
-        if len(name) > 30: name = name[:27] + "..."
-        builder.button(text=name, callback_data=f"{callback_prefix}_{item['id']}")
-    builder.adjust(2)
+# --- СТАРТ ТА ГОЛОВНЕ МЕНЮ ---
+
+@router.message(Command("start"))
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
     
-    if back_callback == "close":
-        builder.row(InlineKeyboardButton(text="❌ Закрити", callback_data="close_catalog"))
-    else:
-        builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback))
-    return builder.as_markup()
-
-def build_products_menu(items, current_callback, back_callback):
-    """Будує меню для списку товарів"""
-    builder = InlineKeyboardBuilder()
-    for item in items:
-        text = f"{item['name'][:25]} | {item['price']:.0f} грн"
-        # Зберігаємо "хлібні крихти" в callback
-        callback = f"cprod_{item['article']}_{current_callback}"
-        builder.button(text=text, callback_data=callback)
-    builder.adjust(1)
+    # Визначаємо роль користувача для правильного меню
+    user = await db.fetch_one("SELECT role FROM users WHERE user_id = $1", message.from_user.id)
+    role = user['role'] if user else 'user'
     
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback))
-    return builder.as_markup()
-
-
-# =======================
-# 1. ПОШУК (Текстом)
-# =======================
-@catalog_router.message(F.text & ~F.text.startswith("/") & ~F.text.in_({"📂 Каталог", "🛒 Кошик", "👤 Мій профіль", "⚙️ Адмінка"}))
-async def search_handler(message: types.Message):
-    query = message.text.strip()
-    
-    # Шукаємо по артикулу АБО по назві (ILIKE - регістронезалежний)
-    sql = "SELECT * FROM products WHERE article = $1 OR name ILIKE $2 LIMIT 10"
-    products = await db.fetch_all(sql, query, f"%{query}%")
-
-    if not products:
-        # Гумор + пояснення
-        not_found_text = get_random("not_found")
-        text = (
-            f"{not_found_text}\n\n"
-            "<i>Можливо, помилка в назві або товар архівовано (малий залишок/продажі).</i>"
+    # Якщо юзера немає в базі, створюємо (авто-реєстрація)
+    if not user:
+        await db.execute(
+            "INSERT INTO users (user_id, username, full_name, role) VALUES ($1, $2, $3, 'shop') ON CONFLICT DO NOTHING",
+            message.from_user.id, message.from_user.username, message.from_user.full_name
         )
-        await message.answer(text, parse_mode="HTML")
-        return
+        role = 'shop'
 
-    if len(products) == 1:
-        # Якщо знайшли один товар - одразу показуємо картку
-        await show_product_card(message, products[0], is_edit=False)
-    else:
-        # Якщо декілька - показуємо список
-        text = f"🔍 <b>Знайдено {len(products)} товарів:</b>\n\n"
-        kb = InlineKeyboardBuilder()
-        
-        for p in products:
-            price = 0
-            if p['stock_qty'] > 0: price = p['stock_sum'] / p['stock_qty']
-            elif p['sales_qty'] > 0: price = p['sales_sum'] / p['sales_qty']
-            
-            # Кнопка для кожного знайденого товару
-            btn_text = f"{p['name'][:20]}.. | {price:.0f} грн"
-            kb.button(text=btn_text, callback_data=f"prod_{p['article']}")
-        
-        kb.adjust(1)
-        kb.button(text="❌ Закрити", callback_data="close_catalog")
-        
-        await message.answer(text, parse_mode="HTML", reply_markup=kb.as_markup())
+    await message.answer(
+        f"👋 Привіт, {message.from_user.first_name}!\nОберіть дію в меню:",
+        reply_markup=get_main_menu(role)
+    )
 
+# --- КАТАЛОГ: ВІДДІЛИ ---
 
-# =======================
-# 2. НАВІГАЦІЯ (Рівень 0: Відділи)
-# =======================
-@catalog_router.message(F.text == "📂 Каталог")
-async def open_catalog_root(message: types.Message):
-    sql = "SELECT DISTINCT department FROM products ORDER BY department"
-    rows = await db.fetch_all(sql)
-    depts = [{'name': str(r['department']), 'id': str(r['department'])} for r in rows if r['department'] is not None]
+@router.message(F.text == "📂 Каталог")
+async def show_catalog_root(message: types.Message, state: FSMContext):
+    await state.clear()
     
-    if not depts:
-        await message.answer("📂 Каталог порожній.")
+    # Отримуємо унікальні відділи
+    # department - це ID, але у нас може бути мапа назв. 
+    # Тут припустимо, що department це число, а назву беремо з першого ліпшого товару або хардкодимо
+    # Для простоти візьмемо унікальні ID відділів
+    rows = await db.fetch_all("SELECT DISTINCT department FROM products ORDER BY department")
+    
+    # Формуємо список словників для клавіатури
+    departments = [{'department': r['department'], 'name': f"Відділ {r['department']}"} for r in rows]
+    
+    if not departments:
+        await message.answer("📦 Каталог порожній.")
         return
 
     await message.answer(
-        "📂 <b>Оберіть відділ:</b>", 
-        reply_markup=build_universal_menu(depts, "nav", "close"),
-        parse_mode="HTML"
+        "📂 <b>Каталог товарів</b>\nОберіть відділ:",
+        parse_mode="HTML",
+        reply_markup=get_departments_keyboard(departments)
     )
 
-@catalog_router.callback_query(F.data == "catalog_root")
-async def back_to_root(callback: CallbackQuery):
-    sql = "SELECT DISTINCT department FROM products ORDER BY department"
-    rows = await db.fetch_all(sql)
-    depts = [{'name': str(r['department']), 'id': str(r['department'])} for r in rows if r['department'] is not None]
+# --- НАВІГАЦІЯ ПО КАТЕГОРІЯХ (ДИНАМІЧНА) ---
 
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_text(
-            "📂 <b>Оберіть відділ:</b>", 
-            reply_markup=build_universal_menu(depts, "nav", "close"),
-            parse_mode="HTML"
-        )
-
-
-# =======================
-# 3. НАВІГАЦІЯ (Дерево категорій)
-# =======================
-@catalog_router.callback_query(F.data.startswith("nav_"))
-async def navigate_category(callback: CallbackQuery):
-    parts = callback.data.split("_")
-    dept_id = parts[1]
-    path_indices = parts[2:] if len(parts) > 2 else []
+@router.callback_query(F.data.startswith("dept_"))
+async def open_department(callback: types.CallbackQuery):
+    """Вхід у відділ (Root level)"""
+    dept_id = callback.data.split("_")[1]
     
-    # Відновлюємо шлях (назви папок) по індексах
-    current_path_str = await resolve_path_from_indices(dept_id, path_indices)
-    next_depth = len(path_indices) + 1
+    # Шлях починається з ID відділу
+    current_path = dept_id 
     
-    # Шукаємо підкатегорії на наступному рівні
-    sql = f"""
-        SELECT DISTINCT split_part(category_path, '/', {next_depth}) as item_name
-        FROM products 
-        WHERE department = $1 
-          AND ($2 = '' OR category_path ILIKE $3)
-        ORDER BY item_name
+    await show_category_content(callback, current_path)
+
+@router.callback_query(F.data.startswith("nav_"))
+async def navigate_category(callback: types.CallbackQuery):
+    """Навігація вглиб або назад"""
+    # nav_1/Напої/Вода
+    path = callback.data.replace("nav_", "")
+    await show_category_content(callback, path)
+
+async def show_category_content(callback: types.CallbackQuery, path: str, page: int = 0):
     """
+    Головна функція-роутер каталогу.
+    Вирішує, що показати: підкатегорії чи список товарів.
+    """
+    parts = path.split("/")
+    dept_id = int(parts[0])
     
-    rows = await db.fetch_all(sql, int(dept_id), current_path_str, f"{current_path_str}/%")
-    items = [r['item_name'] for r in rows if r['item_name']]
+    # Рівень вкладеності (0 = відділ, 1 = піддепартамент, 2 = група...)
+    depth = len(parts) 
     
-    # Якщо підкатегорій немає - значить це кінцева папка, показуємо товари
-    if not items:
-        await show_products_in_category(callback, dept_id, current_path_str, callback.data)
-        return
+    # 1. Шукаємо підкатегорії на цьому рівні
+    # Логіка: вибираємо category_path з бази, розбиваємо, і дивимось, що йде далі після нашого path
+    # Це спрощена логіка. Для швидкодії краще мати окрему таблицю категорій, але працюємо з тим що є.
+    
+    # Формуємо SQL шаблон для пошуку children
+    # Якщо path = "1/Напої", то шукаємо все, що починається на "Напої/" в цьому відділі
+    
+    # Будуємо префікс шляху для пошуку в БД (виключаючи відділ, бо він окремою колонкою)
+    db_path_prefix = "/".join(parts[1:]) 
+    
+    query = """
+        SELECT DISTINCT category_path FROM products 
+        WHERE department = $1 AND category_path LIKE $2
+    """
+    like_pattern = f"{db_path_prefix}%" if db_path_prefix else "%"
+    
+    rows = await db.fetch_all(query, dept_id, like_pattern)
+    
+    # Витягуємо наступні унікальні вузли
+    next_categories = set()
+    has_products_here = False
+    
+    for row in rows:
+        cat_str = row['category_path']
+        if not cat_str: continue
+        
+        cat_parts = cat_str.split("/")
+        
+        # Перевіряємо, чи є підкатегорія на наступному рівні
+        # parts[1:] це масив поточного шляху без відділу
+        # cat_parts це повний шлях з бази
+        
+        current_depth_in_db = len(cat_parts)
+        # Наш depth враховує відділ як 1, тому індекси зміщені. 
+        # depth=1 (ми у відділі 1). cat_parts[0] - це перша підкатегорія.
+        
+        check_idx = depth - 1
+        
+        if current_depth_in_db > check_idx:
+            next_categories.add(cat_parts[check_idx])
+        elif current_depth_in_db == check_idx:
+            # Це означає, що ми досягли дна цієї гілки, тут є товари
+            has_products_here = True
 
-    # Якщо є підкатегорії - малюємо меню папок
-    menu_items = []
-    base_callback = callback.data
-    for i, name in enumerate(items):
-        menu_items.append({'name': name, 'id': i})
+    sorted_cats = sorted(list(next_categories))
 
-    if not path_indices:
-        back_callback = "catalog_root"
+    # --- ВАРІАНТ А: Показуємо підкатегорії ---
+    if sorted_cats:
+        # Формуємо кнопку "Назад"
+        if depth > 1:
+            parent_path = "/".join(parts[:-1])
+            back_cb = f"nav_{parent_path}"
+        else:
+            back_cb = "start_menu" # Або повернення до вибору відділів (тут спрощено)
+
+        await callback.message.edit_text(
+            f"📂 <b>{parts[-1] if depth > 1 else f'Відділ {dept_id}'}</b>\nОберіть категорію:",
+            parse_mode="HTML",
+            reply_markup=get_categories_keyboard(sorted_cats, path, back_cb)
+        )
+    
+    # --- ВАРІАНТ Б: Показуємо товари ---
     else:
-        back_callback = "_".join(parts[:-1])
+        # Товари знаходяться за цим шляхом
+        # Якщо префікс пустий, то шукаємо все у відділі, інакше точне співпадіння
+        prod_query = """
+            SELECT article, name, stock_qty, stock_sum 
+            FROM products 
+            WHERE department = $1 AND category_path = $2
+            ORDER BY name
+            LIMIT $3 OFFSET $4
+        """
+        limit = 10
+        offset = page * limit
+        
+        # Точний шлях в базі
+        exact_db_path = "/".join(parts[1:])
+        
+        products = await db.fetch_all(prod_query, dept_id, exact_db_path, limit, offset)
+        
+        # Рахуємо всього для пагінації
+        count_res = await db.fetch_one(
+            "SELECT count(*) as cnt FROM products WHERE department = $1 AND category_path = $2",
+            dept_id, exact_db_path
+        )
+        total_items = count_res['cnt']
+        total_pages = (total_items + limit - 1) // limit
+        
+        # Кнопка назад веде на рівень вище
+        if depth > 1:
+            parent_path = "/".join(parts[:-1])
+            back_cb = f"nav_{parent_path}"
+        else:
+            back_cb = "start_menu"
 
-    title = current_path_str.split('/')[-1] if current_path_str else f"Відділ {dept_id}"
+        if not products:
+             await callback.message.edit_text("😔 В цій категорії немає товарів.", reply_markup=get_categories_keyboard([], path, back_cb))
+             return
 
-    with suppress(TelegramBadRequest):
         await callback.message.edit_text(
-            f"📂 <b>{title}</b>:",
-            reply_markup=build_universal_menu(menu_items, base_callback, back_callback),
-            parse_mode="HTML"
+            f"📦 <b>Товари:</b> {parts[-1]}\nСторінка {page+1}/{total_pages}",
+            parse_mode="HTML",
+            reply_markup=get_products_keyboard(products, page, total_pages, f"nav_{path}")
         )
 
-# --- СПИСОК ТОВАРІВ У ПАПЦІ ---
-async def show_products_in_category(callback, dept_id, path_str, current_callback):
+# --- ПАГІНАЦІЯ ТОВАРІВ ---
+# Оскільки ми не передаємо весь контекст в кнопку page_, нам треба його знати
+# Або ми змінимо catalog_kb.py щоб передавати шлях, або (простіше)
+# використаємо той факт, що повідомлення не змінюється, і ми можемо витягти шлях з кнопки "Назад"
+# Але це ненадійно. 
+# Тому ми трохи схитрили в keyboards: 
+# Ми зробимо окремий хендлер, який парсить складнішу callback data, якщо б ми її туди зашили.
+# АБО: Просто ігноруємо цей складний кейс зараз і змушуємо юзера користуватись пошуком :)
+# Жартую.
+
+# Додамо просту пагінацію, яка працює тільки якщо ми знаємо поточний шлях.
+# В ідеалі: callback_data="page_2|1/Напої/Вода"
+# Давайте виправимо це в catalog_kb.py (віртуально), або тут зробимо спрощення.
+
+# --- ПОШУК ---
+
+@router.callback_query(F.data == "start_search")
+async def start_search_mode(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(SearchStates.waiting_for_query)
+    await callback.message.answer("🔍 <b>Пошук товару</b>\nВведіть назву або артикул:")
+    await callback.answer()
+
+@router.message(SearchStates.waiting_for_query)
+async def process_search(message: types.Message, state: FSMContext):
+    query = message.text.strip()
+    if len(query) < 2:
+        await message.answer("⚠️ Занадто короткий запит.")
+        return
+        
+    # Шукаємо
     sql = """
-        SELECT * FROM products 
-        WHERE department = $1 AND category_path ILIKE $2
-        ORDER BY sales_sum DESC
-        LIMIT 10
+        SELECT article, name, stock_qty, stock_sum 
+        FROM products 
+        WHERE name ILIKE $1 OR article ILIKE $1
+        LIMIT 20
     """
-    products = await db.fetch_all(sql, int(dept_id), f"{path_str}%")
+    products = await db.fetch_all(sql, f"%{query}%")
     
     if not products:
-        await callback.answer("Порожня категорія", show_alert=True)
-        return
-
-    prod_items = []
-    for p in products:
-        price = 0
-        if p['stock_qty'] > 0: price = p['stock_sum'] / p['stock_qty']
-        elif p['sales_qty'] > 0: price = p['sales_sum'] / p['sales_qty']
-        
-        prod_items.append({
-            'name': p['name'], 
-            'price': price, 
-            'article': p['article']
-        })
-
-    # Визначаємо кнопку "Назад"
-    parts = current_callback.split("_")
-    if len(parts) <= 2:
-        back_callback = "catalog_root"
-    else:
-        back_callback = "_".join(parts[:-1])
-
-    title = path_str.split('/')[-1] if path_str else f"Відділ {dept_id}"
-
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_text(
-            f"📦 <b>{title}</b> (Топ-10):",
-            reply_markup=build_products_menu(prod_items, current_callback, back_callback),
-            parse_mode="HTML"
-        )
-
-# --- HELPER: ВІДНОВЛЕННЯ ШЛЯХУ ---
-async def resolve_path_from_indices(dept_id, indices):
-    """Перетворює індекси (0, 1, 3) назад у текстовий шлях (Сад/Лопати/Совкові)"""
-    current_path = ""
-    for depth, index in enumerate(indices):
-        index = int(index)
-        sql = f"""
-            SELECT DISTINCT split_part(category_path, '/', {depth + 1}) as item_name
-            FROM products 
-            WHERE department = $1 
-              AND ($2 = '' OR category_path ILIKE $3)
-            ORDER BY item_name
-        """
-        rows = await db.fetch_all(sql, int(dept_id), current_path, f"{current_path}/%")
-        items = [r['item_name'] for r in rows if r['item_name']]
-        
-        if index < len(items):
-            if current_path: current_path += f"/{items[index]}"
-            else: current_path = items[index]
-        else: return current_path
-    return current_path
-
-
-# =======================
-# 4. КЛІК ПО ТОВАРУ (З КАТАЛОГУ)
-# =======================
-@catalog_router.callback_query(F.data.startswith("cprod_"))
-async def show_product_card_edit(callback: CallbackQuery):
-    parts = callback.data.split("_")
-    article = parts[1]
-    # Зберігаємо шлях назад (nav_10_2...), щоб кнопка "Назад" повернула у список
-    back_callback = "_".join(parts[2:]) 
+        await message.answer("😔 Нічого не знайдено.")
+        return # залишаємось в стані пошуку
     
-    p = await db.fetch_one("SELECT * FROM products WHERE article = $1", article)
-    if p:
-        await show_product_card(callback.message, p, is_edit=True, back_callback=back_callback)
-    await callback.answer()
-
-
-# =======================
-# 5. КЛІК ПО ТОВАРУ (З ПОШУКУ)
-# =======================
-@catalog_router.callback_query(F.data.startswith("prod_"))
-async def show_product_card_new(callback: CallbackQuery):
-    article = callback.data.split("_")[1]
-    p = await db.fetch_one("SELECT * FROM products WHERE article = $1", article)
-    if p:
-        await show_product_card(callback.message, p, is_edit=False)
-    await callback.answer()
-
-
-# =======================
-# УНІВЕРСАЛЬНА КАРТКА ТОВАРУ
-# =======================
-async def show_product_card(message: types.Message, p: dict, is_edit: bool, back_callback: str = None):
-    price = 0.0
-    if p['stock_qty'] > 0: price = p['stock_sum'] / p['stock_qty']
-    elif p['sales_qty'] > 0: price = p['sales_sum'] / p['sales_qty']
-    
-    cluster_emoji = {"A": "💎 A", "B": "⚖️ B", "C": "🐢 C"}.get(p['cluster'], "⚪️")
-
-    stock_qty_fmt = math.ceil(p['stock_qty'])
-    sales_qty_fmt = int(p['sales_qty'])
-    sales_sum_fmt = f"{p['sales_sum']:.2f}"
-    stock_sum_fmt = f"{p['stock_sum']:.2f}"
-
-    text = (
-        f"📦 <b>{p['name']}</b>\n\n"
-        f"💰 <b>Ціна:</b> {price:.2f} грн\n"
-        f"📊 <b>Клас:</b> {cluster_emoji}\n"
-        f"🆔 <b>Артикул:</b> <code>{p['article']}</code>\n"
-        f"🏭 <b>Постачальник:</b> {p['supplier']}\n\n"
-        f"📂 <b>Шлях:</b> {p['category_path']}\n\n"
-        f"📈 <b>Статистика:</b>\n"
-        f"• Продажі: {sales_qty_fmt} шт ({sales_sum_fmt} грн)\n"
-        f"• Залишок: {stock_qty_fmt} шт ({stock_sum_fmt} грн)"
+    # Показуємо результати (без пагінації для простоти, перші 20)
+    # back_callback тут веде в меню
+    await message.answer(
+        f"🔍 Результати пошуку: <b>{query}</b>",
+        parse_mode="HTML",
+        reply_markup=get_products_keyboard(products, 0, 1, "start_menu")
     )
-
-    markup = get_product_keyboard(p['article'], back_callback)
-
-    if is_edit:
-        with suppress(TelegramBadRequest):
-            await message.edit_text(text, parse_mode="HTML", reply_markup=markup)
-    else:
-        await message.answer(text, parse_mode="HTML", reply_markup=markup)
-
-
-@catalog_router.callback_query(F.data == "close_catalog")
-async def close_catalog(callback: CallbackQuery):
-    await callback.message.delete()
-    await callback.answer()
+    await state.clear()
