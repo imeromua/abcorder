@@ -12,14 +12,12 @@ class Database:
             logger.info(f"🔌 Connecting to PostgreSQL at {config.DB_HOST}:{config.DB_PORT}...")
             
             # Створюємо пул з'єднань
-            # min_size/max_size дозволяють масштабуватись при навантаженні
             self.pool = await asyncpg.create_pool(
                 dsn=config.POSTGRES_DSN,
                 min_size=5,
-                max_size=50  # Збільшено для HighLoad (1000+ юзерів)
+                max_size=50
             )
             
-            # Перевірка
             logger.info(f"✅ DB Connection established. Pool size: {self.pool.get_min_size()}-{self.pool.get_max_size()}")
             
             # Перевірка та створення таблиць
@@ -36,11 +34,11 @@ class Database:
             logger.info("💤 DB Connection closed.")
 
     async def create_tables(self):
-        """Створює необхідну структуру БД, якщо її немає"""
+        """Створює та оновлює структуру БД"""
         logger.info("🛠 Checking database schema...")
         
-        queries = [
-            # 1. Таблиця користувачів
+        # 1. Створення таблиць (якщо їх немає)
+        create_queries = [
             """
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -50,7 +48,6 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
-            # 2. Таблиця товарів (включаючи cluster для ABC аналізу)
             """
             CREATE TABLE IF NOT EXISTS products (
                 article VARCHAR(50) PRIMARY KEY,
@@ -67,7 +64,6 @@ class Database:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """,
-            # 3. Таблиця кошика (з каскадним видаленням)
             """
             CREATE TABLE IF NOT EXISTS cart (
                 user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
@@ -79,26 +75,42 @@ class Database:
             """
         ]
         
-        async with self.pool.acquire() as connection:
-            for q in queries:
-                await connection.execute(q)
+        # 2. Міграції (додавання колонок у вже існуючі таблиці)
+        # Використовуємо IF NOT EXISTS, щоб не було помилок
+        migration_queries = [
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'shop';",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS cluster VARCHAR(10);"
+        ]
         
-        logger.info("📦 DB Schema verified/created successfully.")
+        async with self.pool.acquire() as connection:
+            # Створення
+            for q in create_queries:
+                await connection.execute(q)
+            
+            # Міграція
+            for q in migration_queries:
+                try:
+                    await connection.execute(q)
+                except Exception as e:
+                    logger.warning(f"Migration warning: {e}")
+        
+        logger.info("📦 DB Schema verified/updated successfully.")
 
     # --- Методи для простих запитів (Auto-commit) ---
     
     async def execute(self, query, *args):
-        """Виконання запиту без повернення результату (INSERT, UPDATE, DELETE)"""
+        """Виконання запиту без повернення результату"""
         async with self.pool.acquire() as connection:
             return await connection.execute(query, *args)
 
     async def fetch_one(self, query, *args):
-        """Отримання одного рядка (SELECT ... LIMIT 1)"""
+        """Отримання одного рядка"""
         async with self.pool.acquire() as connection:
             return await connection.fetchrow(query, *args)
 
     async def fetch_all(self, query, *args):
-        """Отримання списку рядків (SELECT ...)"""
+        """Отримання списку рядків"""
         async with self.pool.acquire() as connection:
             return await connection.fetch(query, *args)
 

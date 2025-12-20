@@ -1,3 +1,4 @@
+import secrets
 from aiogram import Router, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -11,11 +12,29 @@ from src.keyboards import (
     get_products_keyboard
 )
 
-# 🔥 ВИПРАВЛЕНО ІМ'Я РОУТЕРА
+# 🔥 ВИПРАВЛЕНО: Правильна назва роутера для main.py
 catalog_router = Router()
 
 class SearchStates(StatesGroup):
     waiting_for_query = State()
+
+# --- PATH REGISTRY (Fix for BUTTON_DATA_INVALID) ---
+# Зберігаємо довгі шляхи в пам'яті, а в кнопки даємо короткі ID
+PATH_REGISTRY = {}
+
+def get_short_id(full_path: str) -> str:
+    """Генерує або повертає існуючий короткий ID для шляху"""
+    for k, v in PATH_REGISTRY.items():
+        if v == full_path:
+            return k
+    
+    short_id = secrets.token_urlsafe(8)
+    PATH_REGISTRY[short_id] = full_path
+    return short_id
+
+def resolve_path(short_id: str) -> str:
+    """Відновлює повний шлях з короткого ID"""
+    return PATH_REGISTRY.get(short_id, short_id)
 
 # --- СТАРТ ТА ГОЛОВНЕ МЕНЮ ---
 
@@ -23,11 +42,9 @@ class SearchStates(StatesGroup):
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     
-    # Визначаємо роль користувача для правильного меню
     user = await db.fetch_one("SELECT role FROM users WHERE user_id = $1", message.from_user.id)
     role = user['role'] if user else 'user'
     
-    # Якщо юзера немає в базі, створюємо (авто-реєстрація)
     if not user:
         await db.execute(
             "INSERT INTO users (user_id, username, full_name, role) VALUES ($1, $2, $3, 'shop') ON CONFLICT DO NOTHING",
@@ -46,7 +63,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
 async def show_catalog_root(message: types.Message, state: FSMContext):
     await state.clear()
     
-    # Отримуємо унікальні відділи
     rows = await db.fetch_all("SELECT DISTINCT department FROM products ORDER BY department")
     
     departments = [{'department': r['department'], 'name': f"Відділ {r['department']}"} for r in rows]
@@ -61,19 +77,27 @@ async def show_catalog_root(message: types.Message, state: FSMContext):
         reply_markup=get_departments_keyboard(departments)
     )
 
-# --- НАВІГАЦІЯ ПО КАТЕГОРІЯХ (ДИНАМІЧНА) ---
+# --- НАВІГАЦІЯ ПО КАТЕГОРІЯХ ---
 
 @catalog_router.callback_query(F.data.startswith("dept_"))
 async def open_department(callback: types.CallbackQuery):
     """Вхід у відділ (Root level)"""
     dept_id = callback.data.split("_")[1]
-    current_path = dept_id 
-    await show_category_content(callback, current_path)
+    # Root шлях не скорочуємо, він і так короткий
+    await show_category_content(callback, dept_id)
 
 @catalog_router.callback_query(F.data.startswith("nav_"))
 async def navigate_category(callback: types.CallbackQuery):
     """Навігація вглиб або назад"""
-    path = callback.data.replace("nav_", "")
+    short_id = callback.data.replace("nav_", "")
+    
+    # Розшифровуємо шлях
+    path = resolve_path(short_id)
+    
+    if not path:
+        await callback.answer("⚠️ Помилка навігації (застаріле меню). Почніть спочатку.", show_alert=True)
+        return
+
     await show_category_content(callback, path)
 
 async def show_category_content(callback: types.CallbackQuery, path: str, page: int = 0):
@@ -82,7 +106,6 @@ async def show_category_content(callback: types.CallbackQuery, path: str, page: 
     depth = len(parts) 
     
     db_path_prefix = "/".join(parts[1:]) 
-    
     query = """
         SELECT DISTINCT category_path FROM products 
         WHERE department = $1 AND category_path LIKE $2
@@ -97,6 +120,7 @@ async def show_category_content(callback: types.CallbackQuery, path: str, page: 
         cat_str = row['category_path']
         if not cat_str: continue
         cat_parts = cat_str.split("/")
+        
         current_depth_in_db = len(cat_parts)
         check_idx = depth - 1
         
@@ -105,18 +129,32 @@ async def show_category_content(callback: types.CallbackQuery, path: str, page: 
 
     sorted_cats = sorted(list(next_categories))
 
+    # --- ФОРМУВАННЯ КНОПКИ "НАЗАД" ---
+    if depth > 1:
+        parent_path = "/".join(parts[:-1])
+        parent_short = get_short_id(parent_path)
+        back_cb = f"nav_{parent_short}"
+    else:
+        back_cb = "start_menu"
+
+    # --- ВАРІАНТ А: ПІДКАТЕГОРІЇ ---
     if sorted_cats:
-        if depth > 1:
-            parent_path = "/".join(parts[:-1])
-            back_cb = f"nav_{parent_path}"
-        else:
-            back_cb = "start_menu"
+        categories_data = []
+        for cat_name in sorted_cats:
+            full_child_path = f"{path}/{cat_name}"
+            short_child = get_short_id(full_child_path)
+            categories_data.append({
+                'name': cat_name,
+                'callback': f"nav_{short_child}"
+            })
 
         await callback.message.edit_text(
             f"📂 <b>{parts[-1] if depth > 1 else f'Відділ {dept_id}'}</b>\nОберіть категорію:",
             parse_mode="HTML",
-            reply_markup=get_categories_keyboard(sorted_cats, path, back_cb)
+            reply_markup=get_categories_keyboard(categories_data, back_cb)
         )
+    
+    # --- ВАРІАНТ Б: ТОВАРИ ---
     else:
         prod_query = """
             SELECT article, name, stock_qty, stock_sum 
@@ -138,20 +176,14 @@ async def show_category_content(callback: types.CallbackQuery, path: str, page: 
         total_items = count_res['cnt']
         total_pages = (total_items + limit - 1) // limit
         
-        if depth > 1:
-            parent_path = "/".join(parts[:-1])
-            back_cb = f"nav_{parent_path}"
-        else:
-            back_cb = "start_menu"
-
         if not products:
-             await callback.message.edit_text("😔 В цій категорії немає товарів.", reply_markup=get_categories_keyboard([], path, back_cb))
+             await callback.message.edit_text("😔 В цій категорії немає товарів.", reply_markup=get_categories_keyboard([], back_cb))
              return
 
         await callback.message.edit_text(
             f"📦 <b>Товари:</b> {parts[-1]}\nСторінка {page+1}/{total_pages}",
             parse_mode="HTML",
-            reply_markup=get_products_keyboard(products, page, total_pages, f"nav_{path}")
+            reply_markup=get_products_keyboard(products, page, total_pages, back_cb)
         )
 
 # --- ПОШУК ---
@@ -179,7 +211,7 @@ async def process_search(message: types.Message, state: FSMContext):
     
     if not products:
         await message.answer("😔 Нічого не знайдено.")
-        return 
+        return
     
     await message.answer(
         f"🔍 Результати пошуку: <b>{query}</b>",
