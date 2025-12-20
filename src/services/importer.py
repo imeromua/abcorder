@@ -1,7 +1,5 @@
 import logging
-
 import pandas as pd
-
 from src.config import config
 from src.database.db import db
 
@@ -20,38 +18,40 @@ COLUMN_MAPPING = {
 }
 
 class ImporterService:
-    async def import_file(self, file_path: str) -> int:
+    async def import_file(self, file_path: str, status_callback=None) -> int:
         """
         Читає файл, фільтрує дані та оновлює базу.
+        status_callback: асинхронна функція (current, total, stage), яку ми викликаємо для оновлення прогресу.
         """
-        df = None  # 1. Ініціалізуємо змінну, щоб уникнути UnboundLocalError
+        df = None
 
         try:
-            # 2. Визначаємо формат (ігноруючи регістр .CSV/.csv)
+            # --- ЕТАП 1: ЧИТАННЯ ---
+            if status_callback:
+                await status_callback(0, 0, "reading")
+
+            # Визначаємо формат
             if file_path.lower().endswith('.csv'):
                 df = pd.read_csv(file_path)
             else:
-                # Всі інші файли (.xlsx, .xls, .xlsb) пробуємо читати як Excel
-                # engine='openpyxl' обов'язковий для .xlsx
                 df = pd.read_excel(file_path, engine='openpyxl')
 
-            # 3. Перевірка, чи створився df
             if df is None:
                 raise ValueError("Не вдалося прочитати файл (DataFrame is None)")
 
-            # 4. Базове очищення
-            # Видаляємо рядки, де немає Артикулу
+            # --- ЕТАП 2: ОБРОБКА ---
+            
+            # Базове очищення
             if 'Артикул' in df.columns:
                 df = df.dropna(subset=['Артикул'])
             elif 'article' in df.columns:
                  df = df.dropna(subset=['article'])
             else:
-                # Якщо колонки Артикул немає взагалі — це не наш файл
                 raise ValueError("У файлі відсутня колонка 'Артикул'")
 
             df = df.fillna('')
 
-            # 5. Формування шляху категорії
+            # Формування шляху категорії
             def build_path(row):
                 hierarchy_cols = ['Департамент', 'Піддеп-т', 'Група', 'Підгрупа']
                 parts = []
@@ -61,36 +61,32 @@ class ImporterService:
                         parts.append(val)
                 return "/".join(parts)
 
-            # Якщо є колонки для ієрархії, будуємо шлях
             if 'Департамент' in df.columns:
                 df['category_path'] = df.apply(build_path, axis=1)
             else:
                 df['category_path'] = ''
 
-            # 6. Перейменування колонок
+            # Перейменування та вибір колонок
             df = df.rename(columns=COLUMN_MAPPING)
-
-            # Залишаємо тільки потрібні
             valid_cols = list(COLUMN_MAPPING.values()) + ['category_path']
             available_cols = [c for c in valid_cols if c in df.columns]
             df = df[available_cols]
 
-            # 7. Конвертація типів
+            # Конвертація типів
             if 'article' in df.columns:
                 df['article'] = df['article'].astype(str)
             
             numeric_cols = ['sales_qty', 'sales_sum', 'stock_qty', 'stock_sum', 'department']
             for col in numeric_cols:
                 if col in df.columns:
+                    # Чистимо від пробілів та ком
                     df[col] = pd.to_numeric(
                         df[col].astype(str).str.replace(',', '.').replace('\xa0', '').replace(' ', ''), 
                         errors='coerce'
                     ).fillna(0)
 
-            # 8. 🔥 РОЗУМНА ФІЛЬТРАЦІЯ
+            # Фільтрація
             initial_count = len(df)
-            
-            # Перевіряємо наявність колонок перед фільтрацією
             has_sales = 'sales_qty' in df.columns
             has_stock = 'stock_qty' in df.columns
 
@@ -101,12 +97,10 @@ class ImporterService:
                 ]
             
             filtered_count = len(df)
-            dead_items = initial_count - filtered_count
-            
-            if dead_items > 0:
-                logging.info(f"🧹 Importer: Відфільтровано {dead_items} мертвих позицій")
+            if initial_count - filtered_count > 0:
+                logging.info(f"🧹 Importer: Відфільтровано {initial_count - filtered_count} мертвих позицій")
 
-            # 9. Підготовка до вставки
+            # Підготовка до вставки
             records = df.to_dict('records')
             total = len(records)
             logging.info(f"📊 До імпорту готово {total} рядків.")
@@ -114,11 +108,19 @@ class ImporterService:
             if total == 0:
                 return 0
 
-            # 10. Пакетна вставка
+            # --- ЕТАП 3: ВСТАВКА (З ПРОГРЕСОМ) ---
             batch_size = 1000
+            processed = 0
+
             for i in range(0, total, batch_size):
                 batch = records[i:i + batch_size]
                 await self._insert_batch(batch)
+                
+                processed += len(batch)
+                
+                # Оновлюємо прогрес-бар
+                if status_callback:
+                    await status_callback(processed, total, "inserting")
 
             return total
 
@@ -162,6 +164,7 @@ class ImporterService:
                 stock_sum = EXCLUDED.stock_sum,
                 updated_at = CURRENT_TIMESTAMP;
         """
-        await db.pool.executemany(query, values)
+        async with db.pool.acquire() as connection:
+            await connection.executemany(query, values)
 
 importer = ImporterService()

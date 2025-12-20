@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # --- БОТ ---
+  bot:
+    build: .
+    container_name: abc_bot
+    restart: always
+    env_file:
+      - .env
+    # Важливо: замінюємо localhost на імена сервісів
+    environment:
+      - DB_HOST=db
+      - REDIS_HOST=redis
+    volumes:
+      - ./logs:/app/logs          # Щоб бачити логи зовні
+      - ./data:/app/data          # Щоб файли імпорту/експорту зберігалися
+    depends_on:
+      - db
+      - redis
+
+  # --- БАЗА ДАНИХ ---
+  db:
+    image: postgres:15-alpine
+    container_name: abc_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  # --- REDIS ---
+  redis:
+    image: redis:alpine
+    container_name: abc_redis
+    restart: always
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:

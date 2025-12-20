@@ -14,14 +14,15 @@ from src.keyboards import (
     get_order_type_keyboard
 )
 
-router = Router()
+# 🔥 ВИПРАВЛЕНО ІМ'Я РОУТЕРА
+cart_router = Router()
 
 class OrderStates(StatesGroup):
     waiting_for_quantity = State()
 
 # --- ДОДАВАННЯ В КОШИК ---
 
-@router.callback_query(F.data.startswith("add_"))
+@cart_router.callback_query(F.data.startswith("add_"))
 async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
     """Користувач натиснув на товар у каталозі"""
     # data format: add_{article}_{back_callback}
@@ -49,7 +50,7 @@ async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_cart_keyboard(article))
 
-@router.callback_query(F.data == "cancel_order")
+@cart_router.callback_query(F.data == "cancel_order")
 async def cancel_add(callback: types.CallbackQuery, state: FSMContext):
     """Скасування вводу кількості"""
     await state.clear()
@@ -57,7 +58,7 @@ async def cancel_add(callback: types.CallbackQuery, state: FSMContext):
     # Можна повертати в меню, але краще просто видалити зайве
     await callback.answer("Скасовано")
 
-@router.message(OrderStates.waiting_for_quantity)
+@cart_router.message(OrderStates.waiting_for_quantity)
 async def process_quantity(message: types.Message, state: FSMContext):
     """Обробка введеного числа (БЕЗПЕЧНА ТРАНЗАКЦІЯ)"""
     text = message.text.strip()
@@ -120,7 +121,7 @@ async def process_quantity(message: types.Message, state: FSMContext):
                     VALUES ($1, $2, $3)
                     ON CONFLICT (user_id, article) 
                     DO UPDATE SET quantity = $3, updated_at = CURRENT_TIMESTAMP
-                """, user_id, article, qty) # Тут ми замінюємо кількість. Якщо треба додавати (+), змініть на cart.quantity + $3
+                """, user_id, article, qty) 
 
         # 🔥 КІНЕЦЬ БЕЗПЕЧНОЇ ЗОНИ 🔥
         
@@ -140,8 +141,8 @@ async def process_quantity(message: types.Message, state: FSMContext):
 
 # --- ПЕРЕГЛЯД КОШИКА ---
 
-@router.message(F.text == "🛒 Кошик")
-@router.callback_query(F.data == "view_cart_btn")
+@cart_router.message(F.text == "🛒 Кошик")
+@cart_router.callback_query(F.data == "view_cart_btn")
 async def show_cart(event: types.Message | types.CallbackQuery):
     """Показує вміст кошика"""
     # Універсальне отримання message
@@ -191,13 +192,13 @@ async def show_cart(event: types.Message | types.CallbackQuery):
 
 # --- КЕРУВАННЯ КОШИКОМ ---
 
-@router.callback_query(F.data == "clear_cart")
+@cart_router.callback_query(F.data == "clear_cart")
 async def clear_cart(callback: types.CallbackQuery):
     await db.execute("DELETE FROM cart WHERE user_id = $1", callback.from_user.id)
     await callback.answer("🗑 Кошик очищено!")
     await callback.message.edit_text("🛒 Кошик порожній.")
 
-@router.callback_query(F.data == "submit_order")
+@cart_router.callback_query(F.data == "submit_order")
 async def pre_submit_order(callback: types.CallbackQuery):
     """Вибір типу замовлення перед фіналізацією"""
     user = await db.fetch_one("SELECT role FROM users WHERE user_id = $1", callback.from_user.id)
@@ -213,7 +214,7 @@ async def pre_submit_order(callback: types.CallbackQuery):
             reply_markup=get_order_type_keyboard()
         )
 
-@router.callback_query(F.data.startswith("order_type_"))
+@cart_router.callback_query(F.data.startswith("order_type_"))
 async def admin_select_order_type(callback: types.CallbackQuery):
     mode_map = {'dept': 'department', 'supp': 'supplier'}
     mode_key = callback.data.split("_")[2]

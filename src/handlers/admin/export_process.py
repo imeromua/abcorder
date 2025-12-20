@@ -35,12 +35,14 @@ async def run_export_all(callback: types.CallbackQuery):
         logger.info(f"📤 Full Export requested by {callback.from_user.id}")
         
         # 1. Отримуємо всі товари з бази
-        # fetch_all повертає список об'єктів Record, які поводяться як словники
-        items = await db.fetch_all("SELECT * FROM products ORDER BY department, name")
+        records = await db.fetch_all("SELECT * FROM products ORDER BY department, name")
         
-        if not items:
+        if not records:
             await status_msg.edit_text("❌ База даних порожня.")
             return
+
+        # 🔥 ВИПРАВЛЕННЯ: Конвертуємо Record у dict, щоб pandas бачив назви колонок
+        items = [dict(r) for r in records]
 
         # 2. Генеруємо файл (з кольоровим стовпчиком DP)
         file_path = await exporter.export_full_base(items)
@@ -56,9 +58,6 @@ async def run_export_all(callback: types.CallbackQuery):
         # 4. Прибираємо повідомлення про статус і видаляємо файл з диска
         await status_msg.delete()
         
-        # Невеликий хак: даємо телеграму час відправити файл перед видаленням
-        # (хоча FSInputFile зазвичай читає одразу, краще підстрахуватись)
-        # В реальному проді краще використовувати async worker для очистки, але тут видалимо одразу
         try:
             os.remove(file_path)
         except Exception:

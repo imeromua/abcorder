@@ -5,8 +5,7 @@ from aiogram import F, Router, types
 from aiogram.types import FSInputFile
 
 from src.database.db import db
-from src.keyboards.inline import \
-    get_analytics_order_type_keyboard 
+from src.keyboards import get_analytics_order_type_keyboard
 from src.services.exporter import exporter
 
 analytics_router = Router()
