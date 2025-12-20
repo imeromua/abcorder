@@ -1,4 +1,5 @@
 import logging
+import asyncio
 import pandas as pd
 from src.config import config
 from src.database.db import db
@@ -21,33 +22,45 @@ class ImporterService:
     async def import_file(self, file_path: str, status_callback=None) -> int:
         """
         Читає файл, фільтрує дані та оновлює базу.
-        status_callback: асинхронна функція (current, total, stage), яку ми викликаємо для оновлення прогресу.
         """
         df = None
 
         try:
-            # --- ЕТАП 1: ЧИТАННЯ ---
+            # --- ЕТАП 1: ЧИТАННЯ (Non-blocking) ---
             if status_callback:
                 await status_callback(0, 0, "reading")
 
-            # Визначаємо формат
-            if file_path.lower().endswith('.csv'):
-                df = pd.read_csv(file_path)
-            else:
-                df = pd.read_excel(file_path, engine='openpyxl')
+            logging.info(f"📖 Починаю читання файлу (в окремому потоці): {file_path}")
+
+            # Визначаємо функцію для читання (щоб передати в потік)
+            def read_data():
+                if file_path.lower().endswith('.csv'):
+                    return pd.read_csv(file_path)
+                elif file_path.lower().endswith('.xlsb'):
+                    # xlsb читається швидше
+                    return pd.read_excel(file_path, engine='pyxlsb')
+                else:
+                    # Стандартний xlsx (найповільніший)
+                    return pd.read_excel(file_path, engine='openpyxl')
+
+            # 🔥 МАГІЯ ТУТ: Запускаємо читання в окремому потоці, не блокуємо бота
+            df = await asyncio.to_thread(read_data)
 
             if df is None:
                 raise ValueError("Не вдалося прочитати файл (DataFrame is None)")
+            
+            logging.info(f"✅ Файл прочитано. Рядків: {len(df)}. Починаю обробку...")
 
             # --- ЕТАП 2: ОБРОБКА ---
             
             # Базове очищення
+            # Шукаємо колонку артикулу (ігноруємо регістр першої літери якщо треба, але тут чітко)
             if 'Артикул' in df.columns:
                 df = df.dropna(subset=['Артикул'])
             elif 'article' in df.columns:
                  df = df.dropna(subset=['article'])
             else:
-                raise ValueError("У файлі відсутня колонка 'Артикул'")
+                raise ValueError(f"У файлі відсутня колонка 'Артикул'. Знайдені колонки: {list(df.columns)}")
 
             df = df.fillna('')
 
